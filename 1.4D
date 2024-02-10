@@ -1,0 +1,161 @@
+// Pin assignments
+const int motionSensorPin = 3;
+const int ultrasonicTriggerPin = 4;
+const int ultrasonicEchoPin = 5;
+const int potentiometerPin = A1;
+const int ledPin = PB5;
+const int btn_pin = 2;
+
+// Variables
+bool pauseSensorReadings = false;
+volatile bool buttonInterruptFlag = false;
+
+// Ultrasonic sensor variables
+long duration;
+int distance;
+
+// Potentiometer variables
+int potentiometerValue;
+
+// Button variables
+unsigned long lastButtonPressTime = 0;
+const unsigned long buttonDebounceDelay = 50;
+
+// Setup function, runs once when the microcontroller starts
+void setup() {
+  // Initialize serial communication
+  Serial.begin(9600);
+
+  // Set pin modes
+  pinMode(btn_pin, INPUT_PULLUP);
+  pinMode(motionSensorPin, INPUT);
+  pinMode(ultrasonicTriggerPin, OUTPUT);
+  pinMode(ultrasonicEchoPin, INPUT);
+  pinMode(potentiometerPin, INPUT);
+  DDRB |= (1 << ledPin);
+
+  // Enable Pin Change Interrupt for button pin (D2 on ATmega328P)
+  PCMSK2 |= (1 << PCINT18);
+  // Enable Pin Change Interrupt for ultrasonic sensor echo pin (D7 on ATmega328P)
+  PCMSK2 |= (1 << PCINT23);
+  // Enable Pin Change Interrupt for the entire PCINT2 interrupt vector
+  PCICR |= (1 << PCIE2);
+
+  // Set up Timer1 for timer interrupt
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1 = 0;
+  OCR1A = 31249;  // Set the value for 5 seconds
+  TCCR1B |= (1 << WGM12); // Configure timer for CTC mode
+  TCCR1B |= (1 << CS12) | (1 << CS10);  // Set prescaler to 1024
+  TIMSK1 |= (1 << OCIE1A);  // Enable timer compare interrupt
+}
+
+// Main loop function, runs repeatedly after setup
+void loop() {
+  // Call interrupt service routines
+  motionSensorInterrupt();
+  ultrasonicSensorInterrupt();
+  potentiometerSensorInterrupt();
+  buttonInterrupt();
+}
+
+// Toggle function called when the button is pressed
+void toggle() {
+  // Toggle the LED state using bitwise XOR
+  PORTB ^= (1 << ledPin);
+  // Set the pause state to true for a few seconds
+  pauseSensorReadings = true;
+  delay(2000);  // Pause for 2 seconds
+  pauseSensorReadings = false;  // Resume sensor readings
+}
+
+// Motion sensor interrupt service routine
+void motionSensorInterrupt() {
+  if (!pauseSensorReadings) {
+    // Read motion sensor value
+    int motionValue = digitalRead(motionSensorPin);
+
+    if (motionValue == HIGH) {
+      Serial.println("Motion has been Detected!");
+      PORTB |= (1 << ledPin); // Turn on the LED
+    } else {
+      Serial.println("No Motion Detected.");
+      PORTB &= ~(1 << ledPin); // Turn off the LED
+    }
+  }
+}
+
+// Ultrasonic sensor interrupt service routine
+void ultrasonicSensorInterrupt() {
+  if (!pauseSensorReadings) {
+    // Trigger ultrasonic sensor
+    digitalWrite(ultrasonicTriggerPin, LOW);
+    delayMicroseconds(2);
+    digitalWrite(ultrasonicTriggerPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(ultrasonicTriggerPin, LOW);
+
+    // Measure duration and calculate distance
+    duration = pulseIn(ultrasonicEchoPin, HIGH);
+    distance = duration * 0.034 / 2;
+
+    // Display distance information
+    Serial.print("Distance: ");
+    Serial.println(distance);
+
+    // Check distance and control LED
+    if (distance < 20) {
+      Serial.println("Distance is too low: " + String(distance));
+      PORTB |= (1 << ledPin); // Turn on the LED
+    } else {
+      Serial.println("Distance: " + String(distance));
+      PORTB &= ~(1 << ledPin); // Turn off the LED
+    }
+  }
+}
+
+// Potentiometer sensor interrupt service routine
+void potentiometerSensorInterrupt() {
+  if (!pauseSensorReadings) {
+    // Read potentiometer value
+    potentiometerValue = analogRead(potentiometerPin);
+    Serial.print("Potentiometer Value: ");
+    Serial.println(potentiometerValue);
+  }
+}
+
+// Button interrupt service routine
+void buttonInterrupt() {
+  unsigned long currentMillis = millis();
+
+  // Check if the button is pressed and debounce
+  if (digitalRead(btn_pin) == LOW && (currentMillis - lastButtonPressTime) > buttonDebounceDelay) {
+    lastButtonPressTime = currentMillis;
+    toggle();
+    Serial.println("Button Interrupt");
+  }
+}
+
+// Pin Change Interrupt Service Routine
+ISR(PCINT2_vect) {
+  // Check if the button pin caused the interrupt
+  if (bitRead(PINB, PCINT18)) {
+    buttonInterruptFlag = true;
+  }
+  // Check if the ultrasonic sensor echo pin caused the interrupt
+  else if (bitRead(PINB, PCINT23)) {
+    ultrasonicSensorInterrupt();
+  }
+  // Check if the potentiometer pin caused the interrupt
+  else if (bitRead(PINB, PCINT21)) { // Assuming the potentiometer is connected to PCINT21 (A1 on ATmega328P)
+    potentiometerSensorInterrupt();
+  }
+}
+
+// Timer interrupt service routine
+ISR(TIMER1_COMPA_vect) {
+  // Toggle the LED state using bitwise XOR
+  PORTB ^= (1 << ledPin);
+  delay(1000);
+}
